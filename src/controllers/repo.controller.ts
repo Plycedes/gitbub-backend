@@ -45,27 +45,6 @@ export async function createRepo(req: CustomRequest, res: Response) {
     }
 }
 
-function handleGitService(req: Request, res: Response, service: "upload-pack" | "receive-pack") {
-    const { user, repo } = req.params;
-    const repoPath = path.join(process.env.GIT_STORAGE_PATH || "/git", user, `${repo}.git`);
-
-    if (!fs.existsSync(repoPath)) {
-        res.status(404).send("Repository not found");
-        return;
-    }
-
-    res.setHeader("Content-Type", `application/x-git-${service}-result`);
-
-    const gitCommand = service === "upload-pack" ? "upload-pack" : "receive-pack";
-    const git = spawn("git", [gitCommand, "--stateless-rpc", repoPath]);
-    console.log("Executing handleGit: ", gitCommand);
-
-    req.pipe(git.stdin);
-    git.stdout.pipe(res);
-    git.stderr.on("data", (data) => console.error(data.toString()));
-}
-
-// Handle info/refs (advertise refs for push/clone)
 export function getInfoRefs(req: Request, res: Response) {
     const { user, repo } = req.params;
     const { service } = req.query;
@@ -99,13 +78,49 @@ function formatGitServiceHeader(message: string) {
     return length + message;
 }
 
-// Handle clone/fetch
 export function gitUploadPack(req: Request, res: Response) {
-    handleGitService(req, res, "upload-pack");
+    const { user, repo } = req.params;
+    const repoPath = path.join(process.env.GIT_STORAGE_PATH || "/git", user, `${repo}.git`);
+
+    if (!fs.existsSync(repoPath)) {
+        res.status(404).send("Repository not found");
+        return;
+    }
+
+    res.setHeader("Content-Type", `application/x-git-upload-pack-result`);
+
+    const git = spawn("git", ["upload-pack", "--stateless-rpc", repoPath]);
+    console.log("Executing upload-pack");
+
+    req.pipe(git.stdin);
+    git.stdout.pipe(res);
+    git.stderr.on("data", (data) => console.error(data.toString()));
 }
 
-// Handle push
-export function gitReceivePack(req: Request, res: Response) {
-    console.log("here");
-    handleGitService(req, res, "receive-pack");
+export async function gitReceivePack(req: CustomRequest, res: Response) {
+    const { user, repo } = req.params;
+    const repoPath = path.join(process.env.GIT_STORAGE_PATH || "/git", user, `${repo}.git`);
+
+    const repoDoc = await Repo.findOne({ name: repo }).populate("owner", "username _id");
+    if (!repoDoc) {
+        res.status(404).send("Repository not found");
+        return;
+    }
+
+    if (!req.user || repoDoc.owner._id.toString() !== (req.user?._id as string).toString()) {
+        console.log(
+            "Wrong credentials: ",
+            (req.user?._id as string).toString(),
+            repoDoc.owner._id.toString()
+        );
+        res.status(403).send("You do not have permission to push to this repository");
+        return;
+    }
+
+    res.setHeader("Content-Type", `application/x-git-receive-pack-result`);
+    const git = spawn("git", ["receive-pack", "--stateless-rpc", repoPath]);
+
+    req.pipe(git.stdin);
+    git.stdout.pipe(res);
+    git.stderr.on("data", (data) => console.error(data.toString()));
 }
