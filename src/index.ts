@@ -14,6 +14,12 @@ const initializeServer = async (): Promise<void> => {
         app.listen(PORT, () => {
             console.log(`Server is running on port: ${PORT}`);
         });
+
+        const tempDir: string = path.join(__dirname, "../", "temp", "files");
+        if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+            console.log("Folder created");
+        }
     } catch (error) {
         console.error("Failed to start server!!", error);
     }
