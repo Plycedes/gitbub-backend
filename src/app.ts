@@ -2,6 +2,7 @@ import express, { Application, Request, Response } from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import { errorHandler } from "./middlewares/error.middleware";
 
 dotenv.config();
 
@@ -49,5 +50,7 @@ app.use(
 
 import gitRouter from "./routers/git.router";
 app.use("", gitRouter);
+
+app.use(errorHandler);
 
 export { app };
