@@ -29,3 +29,8 @@ export async function rmrf(p: string) {
         await fsp.rm(p, { recursive: true, force: true });
     } catch {}
 }
+
+export function formatGitServiceHeader(message: string) {
+    const length = (message.length + 4).toString(16).padStart(4, "0");
+    return length + message;
+}
