@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+import { NextFunction, Request, Response } from "express";
 import { spawn } from "child_process";
 import { Repo } from "../models/repo.model";
 import { CustomRequest } from "../middlewares/auth.middleware";
@@ -56,31 +56,62 @@ export const gitUploadPack = asyncHandler(async (req: Request, res: Response) =>
     git.stderr.on("data", (data) => console.error(data.toString()));
 });
 
-export const gitReceivePack = asyncHandler(async (req: CustomRequest, res: Response) => {
-    const { user, repo } = req.params;
-    const repoPath = bareRepoPath(user, repo);
-    await ensureRepoExists(repoPath);
+export const gitReceivePack = asyncHandler(
+    async (req: CustomRequest, res: Response, next: NextFunction) => {
+        const { user, repo } = req.params;
+        const repoPath = bareRepoPath(user, repo);
+        await ensureRepoExists(repoPath);
 
-    const repoDoc = await Repo.findOne({ name: repo }).populate("owner", "username _id");
-    if (!repoDoc) {
-        res.status(404).send("Repository not found");
-        return;
+        const repoDoc = await Repo.findOne({ name: repo }).populate("owner", "username _id");
+        if (!repoDoc) {
+            res.status(404).send("Repository not found");
+            return;
+        }
+
+        if (!req.user || repoDoc.owner._id.toString() !== (req.user?._id as string).toString()) {
+            console.log(
+                "Wrong credentials: ",
+                (req.user?._id as string).toString(),
+                repoDoc.owner._id.toString()
+            );
+            res.status(403).send("You do not have permission to push to this repository");
+            return;
+        }
+
+        const branchProtectionEnabled = false; // could be a DB field
+        if (branchProtectionEnabled) {
+            let rawBody = "";
+            req.on("data", (chunk) => (rawBody += chunk));
+            req.on("end", () => {
+                if (rawBody.includes("refs/heads/main")) {
+                    const err = new ApiError(403, "Direct pushes not allowed");
+                    next(err);
+                }
+                proxyGitService(res, repoPath, rawBody, "receive-pack");
+            });
+            return;
+        }
+
+        proxyGitService(res, repoPath, req, "receive-pack");
+    }
+);
+
+export function proxyGitService(
+    res: Response,
+    repoPath: string,
+    input: any,
+    service: "upload-pack" | "receive-pack"
+) {
+    res.setHeader("Content-Type", `application/x-git-${service}-result`);
+    const git = spawn("git", [service, "--stateless-rpc", repoPath]);
+
+    if (typeof input === "string") {
+        git.stdin.write(input);
+        git.stdin.end();
+    } else {
+        input.pipe(git.stdin);
     }
 
-    if (!req.user || repoDoc.owner._id.toString() !== (req.user?._id as string).toString()) {
-        console.log(
-            "Wrong credentials: ",
-            (req.user?._id as string).toString(),
-            repoDoc.owner._id.toString()
-        );
-        res.status(403).send("You do not have permission to push to this repository");
-        return;
-    }
-
-    res.setHeader("Content-Type", `application/x-git-receive-pack-result`);
-    const git = spawn("git", ["receive-pack", "--stateless-rpc", repoPath]);
-
-    req.pipe(git.stdin);
     git.stdout.pipe(res);
     git.stderr.on("data", (data) => console.error(data.toString()));
-});
+}

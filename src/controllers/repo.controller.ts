@@ -64,16 +64,21 @@ export const getRepoPath = asyncHandler(async (req: Request, res: Response) => {
         await ensureRepoExists(gitdir);
 
         // Resolve branch → commit
-        let head: string;
-        try {
-            head = await git.resolveRef({ fs, gitdir, ref: branch });
-        } catch {
-            throw new ApiError(404, `Branch not found: ${branch}`);
+        let commitOid: string;
+        if (req.query.commit) {
+            commitOid = req.query.commit as string;
+        } else {
+            try {
+                commitOid = await git.resolveRef({ fs, gitdir, ref: branch });
+            } catch {
+                throw new ApiError(404, `Branch not found: ${branch}`);
+            }
         }
 
         // Read commit to get root tree
-        const { commit } = await git.readCommit({ fs, gitdir, oid: head });
-        let treeOid = commit.tree;
+        const commitInfo = await git.readCommit({ fs, gitdir, oid: commitOid }).catch(() => null);
+        if (!commitInfo) throw new ApiError(404, "Commit not found");
+        let treeOid = commitInfo.commit.tree;
 
         // Walk down to the requested scopePath
         if (scopePath) {
@@ -119,16 +124,21 @@ export const getRepoTree = asyncHandler(async (req: Request, res: Response) => {
     await ensureRepoExists(gitdir);
 
     // Resolve branch → commit
-    let head: string;
-    try {
-        head = await git.resolveRef({ fs, gitdir, ref: branch });
-    } catch {
-        return res.status(404).json({ error: `Branch not found: ${branch}` });
+    let commitOid: string;
+    if (req.query.commit) {
+        commitOid = req.query.commit as string;
+    } else {
+        try {
+            commitOid = await git.resolveRef({ fs, gitdir, ref: branch });
+        } catch {
+            throw new ApiError(404, `Branch not found: ${branch}`);
+        }
     }
 
     // Read commit to get root tree
-    const { commit } = await git.readCommit({ fs, gitdir, oid: head });
-    let treeOid = commit.tree;
+    const commitInfo = await git.readCommit({ fs, gitdir, oid: commitOid }).catch(() => null);
+    if (!commitInfo) throw new ApiError(404, "Commit not found");
+    let treeOid = commitInfo.commit.tree;
 
     // Walk down to the requested scopePath if given
     if (scopePath) {
@@ -178,4 +188,56 @@ export const getRepoTree = asyncHandler(async (req: Request, res: Response) => {
     const tree = await buildTree(treeOid, scopePath);
 
     res.json({ branch, path: scopePath, tree });
+});
+
+export const getRepoCommits = asyncHandler(async (req: Request, res: Response) => {
+    const { user, repo } = req.params as { user: string; repo: string };
+    const branch = (req.query.branch as string) || "main";
+    const depth = req.query.depth;
+
+    const gitdir = bareRepoPath(user, repo);
+    await ensureRepoExists(gitdir);
+
+    const entries = await git.log({ fs, gitdir, ref: branch, depth: 100 }).catch(() => null);
+    if (!entries) throw new ApiError(404, `Branch not found: ${branch}`);
+
+    const history = entries.map((e) => ({
+        sha: e.oid,
+        message: e.commit.message,
+        author: e.commit.author?.name,
+        email: e.commit.author?.email,
+        date: e.commit.author?.timestamp ? new Date(e.commit.author.timestamp * 1000) : undefined,
+        parents: e.commit.parent,
+    }));
+
+    res.json(history);
+});
+
+export const getFileContent = asyncHandler(async (req: Request, res: Response) => {
+    const { user, repo } = req.params as { user: string; repo: string };
+    const branch = (req.query.branch as string) || "main";
+    const filepath = toPosix((req.query.path as string) || "");
+
+    if (!filepath) throw new ApiError(400, "File path missing");
+
+    const gitdir = bareRepoPath(user, repo);
+    await ensureRepoExists(gitdir);
+
+    let commitOid: string;
+    if (req.query.commit) {
+        commitOid = req.query.commit as string;
+    } else {
+        try {
+            commitOid = await git.resolveRef({ fs, gitdir, ref: branch });
+        } catch {
+            throw new ApiError(404, `Branch not found: ${branch}`);
+        }
+    }
+
+    const content = await git.readBlob({ fs, gitdir, oid: commitOid, filepath }).catch(() => null);
+    if (!content) return res.status(404).json({ error: "File not found at ref" });
+    const text = new TextDecoder("utf-8").decode(content.blob);
+
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.status(200).send(text);
 });
