@@ -3,8 +3,19 @@ import { spawn } from "child_process";
 import { Repo } from "../models/repo.model";
 import { CustomRequest } from "../middlewares/auth.middleware";
 import { ApiError } from "../utils/ApiError";
-import { bareRepoPath, ensureRepoExists, formatGitServiceHeader } from "./helpers/git.helpers";
+import {
+    bareRepoPath,
+    ensureRepoExists,
+    formatGitServiceHeader,
+    makeTempWorkdir,
+    rmrf,
+    toPosix,
+} from "./helpers/git.helpers";
 import { asyncHandler } from "../utils/asyncHandler";
+import * as git from "isomorphic-git";
+import fs from "fs";
+import fsp from "fs/promises";
+import path from "path";
 
 export const getInfoRefs = asyncHandler(async (req: Request, res: Response) => {
     const { user, repo } = req.params;
@@ -16,7 +27,7 @@ export const getInfoRefs = asyncHandler(async (req: Request, res: Response) => {
     }
 
     const repoPath = bareRepoPath(user, repo);
-    ensureRepoExists(repoPath);
+    await ensureRepoExists(repoPath);
 
     res.setHeader("Content-Type", `application/x-${service}-advertisement`);
     res.write(formatGitServiceHeader(`# service=${service}\n`));
@@ -33,7 +44,7 @@ export const gitUploadPack = asyncHandler(async (req: Request, res: Response) =>
     const { user, repo } = req.params;
 
     const repoPath = bareRepoPath(user, repo);
-    ensureRepoExists(repoPath);
+    await ensureRepoExists(repoPath);
 
     res.setHeader("Content-Type", `application/x-git-upload-pack-result`);
 
@@ -48,7 +59,7 @@ export const gitUploadPack = asyncHandler(async (req: Request, res: Response) =>
 export const gitReceivePack = asyncHandler(async (req: CustomRequest, res: Response) => {
     const { user, repo } = req.params;
     const repoPath = bareRepoPath(user, repo);
-    ensureRepoExists(repoPath);
+    await ensureRepoExists(repoPath);
 
     const repoDoc = await Repo.findOne({ name: repo }).populate("owner", "username _id");
     if (!repoDoc) {
