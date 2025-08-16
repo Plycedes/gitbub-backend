@@ -22,3 +22,14 @@ export interface PaginationType extends ParsedQs {
     limit?: string;
     query?: string;
 }
+
+enum Visibility {
+    PUBLIC = "public",
+    PRIVATE = "private",
+}
+
+export interface CreateRepoRequestBody {
+    name: string;
+    visibility: Visibility;
+    description?: string;
+}
