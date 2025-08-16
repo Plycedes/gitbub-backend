@@ -3,64 +3,56 @@ import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { Repo } from "../models/repo.model";
-import { asyncHandler } from "../utils/asyncHandler";
 import { CustomRequest } from "../middlewares/auth.middleware";
 import { ApiError } from "../utils/ApiError";
+import { bareRepoPath, ensureRepoExists } from "./helpers/repo.helpers";
+import { asyncHandler } from "../utils/asyncHandler";
 
-export async function createRepo(req: CustomRequest, res: Response) {
-    try {
-        const { name, visibility } = req.body;
+export const createRepo = asyncHandler(async (req: CustomRequest, res: Response) => {
+    const { name, visibility } = req.body;
 
-        if (!req.user) {
-            throw new ApiError(401, "Unauthorized Request");
-        }
-
-        const ownerId = req.user._id;
-
-        const userDir = path.join(process.env.GIT_STORAGE_PATH || "/git", req.user.username);
-        if (!fs.existsSync(userDir)) {
-            fs.mkdirSync(userDir, { recursive: true });
-        }
-
-        const repoPath = path.join(userDir, `${name}.git`);
-
-        await new Promise<void>((resolve, reject) => {
-            const git = spawn("git", ["init", "--bare", repoPath]);
-            git.on("close", (code) => {
-                if (code === 0) resolve();
-                else reject(new Error(`git init failed with code ${code}`));
-            });
-        });
-
-        const repo = await Repo.create({
-            name,
-            owner: ownerId,
-            visibility,
-            path: repoPath,
-        });
-
-        res.status(201).json({ success: true, repo });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
+    if (!req.user) {
+        throw new ApiError(401, "Unauthorized Request");
     }
-}
 
-export function getInfoRefs(req: Request, res: Response) {
+    const ownerId = req.user._id;
+
+    const userDir = path.join(process.env.GIT_STORAGE_PATH || "/git", req.user.username);
+    if (!fs.existsSync(userDir)) {
+        fs.mkdirSync(userDir, { recursive: true });
+    }
+
+    const repoPath = path.join(userDir, `${name}.git`);
+
+    await new Promise<void>((resolve, reject) => {
+        const git = spawn("git", ["init", "--bare", repoPath]);
+        git.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`git init failed with code ${code}`));
+        });
+    });
+
+    const repo = await Repo.create({
+        name,
+        owner: ownerId,
+        visibility,
+        path: repoPath,
+    });
+
+    res.status(201).json({ success: true, repo });
+});
+
+export const getInfoRefs = asyncHandler(async (req: Request, res: Response) => {
     const { user, repo } = req.params;
     const { service } = req.query;
     console.log("Executing getInfo");
 
     if (!service || (service !== "git-upload-pack" && service !== "git-receive-pack")) {
-        res.status(400).send("Invalid service");
-        return;
+        throw new ApiError(400, "Invalid service");
     }
 
-    const repoPath = path.join(process.env.GIT_STORAGE_PATH || "/git", user, `${repo}.git`);
-    console.log("Repo", repoPath);
-    if (!fs.existsSync(repoPath)) {
-        res.status(404).send("Repository not found");
-        return;
-    }
+    const repoPath = bareRepoPath(user, repo);
+    ensureRepoExists(repoPath);
 
     res.setHeader("Content-Type", `application/x-${service}-advertisement`);
     res.write(formatGitServiceHeader(`# service=${service}\n`));
@@ -71,21 +63,18 @@ export function getInfoRefs(req: Request, res: Response) {
 
     git.stdout.pipe(res);
     git.stderr.on("data", (data) => console.error(data.toString()));
-}
+});
 
 function formatGitServiceHeader(message: string) {
     const length = (message.length + 4).toString(16).padStart(4, "0");
     return length + message;
 }
 
-export function gitUploadPack(req: Request, res: Response) {
+export const gitUploadPack = asyncHandler(async (req: Request, res: Response) => {
     const { user, repo } = req.params;
-    const repoPath = path.join(process.env.GIT_STORAGE_PATH || "/git", user, `${repo}.git`);
 
-    if (!fs.existsSync(repoPath)) {
-        res.status(404).send("Repository not found");
-        return;
-    }
+    const repoPath = bareRepoPath(user, repo);
+    ensureRepoExists(repoPath);
 
     res.setHeader("Content-Type", `application/x-git-upload-pack-result`);
 
@@ -95,11 +84,12 @@ export function gitUploadPack(req: Request, res: Response) {
     req.pipe(git.stdin);
     git.stdout.pipe(res);
     git.stderr.on("data", (data) => console.error(data.toString()));
-}
+});
 
-export async function gitReceivePack(req: CustomRequest, res: Response) {
+export const gitReceivePack = asyncHandler(async (req: CustomRequest, res: Response) => {
     const { user, repo } = req.params;
-    const repoPath = path.join(process.env.GIT_STORAGE_PATH || "/git", user, `${repo}.git`);
+    const repoPath = bareRepoPath(user, repo);
+    ensureRepoExists(repoPath);
 
     const repoDoc = await Repo.findOne({ name: repo }).populate("owner", "username _id");
     if (!repoDoc) {
@@ -123,4 +113,4 @@ export async function gitReceivePack(req: CustomRequest, res: Response) {
     req.pipe(git.stdin);
     git.stdout.pipe(res);
     git.stderr.on("data", (data) => console.error(data.toString()));
-}
+});

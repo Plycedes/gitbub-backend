@@ -11,7 +11,7 @@ import { verifyBasicAuth } from "../middlewares/basicAuth.middleware";
 const router = Router();
 
 // Create a new repo (needs auth)
-router.post("/", verifyJWT, createRepo);
+router.post("/repo/create", verifyJWT, createRepo);
 
 // Git Smart HTTP endpoints
 router.get("/:user/:repo([^.]+)\\.git/info/refs", getInfoRefs);
