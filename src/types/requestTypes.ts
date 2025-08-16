@@ -33,3 +33,11 @@ export interface CreateRepoRequestBody {
     visibility: Visibility;
     description?: string;
 }
+
+export interface RepoTreeItem {
+    name: string;
+    path: string;
+    type: "dir" | "file";
+    oid: string;
+    children?: RepoTreeItem[];
+}

@@ -7,7 +7,7 @@ import { Repo } from "../models/repo.model";
 import { CustomRequest } from "../middlewares/auth.middleware";
 import { ApiError } from "../utils/ApiError";
 import { asyncHandler } from "../utils/asyncHandler";
-import { CreateRepoRequestBody } from "../types/requestTypes";
+import { CreateRepoRequestBody, RepoTreeItem } from "../types/requestTypes";
 import {
     bareRepoPath,
     ensureRepoExists,
@@ -54,14 +54,7 @@ export const createRepo = asyncHandler(
     }
 );
 
-interface RepoTreeItem {
-    name: string;
-    path: string;
-    type: "dir" | "file";
-    oid: string;
-}
-
-export async function getRepoTree(req: Request, res: Response) {
+export const getRepoPath = asyncHandler(async (req: Request, res: Response) => {
     try {
         const { user, repo } = req.params as { user: string; repo: string };
         const branch = (req.query.branch as string) || "main";
@@ -75,20 +68,38 @@ export async function getRepoTree(req: Request, res: Response) {
         try {
             head = await git.resolveRef({ fs, gitdir, ref: branch });
         } catch {
-            return res.status(404).json({ error: `Branch not found: ${branch}` });
+            throw new ApiError(404, `Branch not found: ${branch}`);
         }
 
-        // Use git.walk to traverse tree at the given path
-        const { tree } = await git.readTree({ fs, gitdir, oid: head });
+        // Read commit to get root tree
+        const { commit } = await git.readCommit({ fs, gitdir, oid: head });
+        let treeOid = commit.tree;
+
+        // Walk down to the requested scopePath
+        if (scopePath) {
+            const parts = scopePath.split("/").filter(Boolean);
+
+            for (const part of parts) {
+                const { tree } = await git.readTree({ fs, gitdir, oid: treeOid });
+                const entry = tree.find((e) => e.path === part);
+                if (!entry || entry.type !== "tree") {
+                    throw new ApiError(404, `Path not found: ${scopePath}`);
+                }
+                treeOid = entry.oid;
+            }
+        }
+
+        // Finally read the tree at the resolved location
+        const { tree } = await git.readTree({ fs, gitdir, oid: treeOid });
 
         const items: RepoTreeItem[] = tree.map((entry) => ({
-            name: entry.path.split("/").pop()!,
-            path: entry.path,
+            name: entry.path,
+            path: (scopePath ? scopePath + "/" : "") + entry.path,
             type: entry.type === "tree" ? "dir" : "file",
             oid: entry.oid,
         }));
 
-        // Apply scope filtering
+        // Sort dirs before files
         items.sort((a, b) =>
             a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1
         );
@@ -97,4 +108,74 @@ export async function getRepoTree(req: Request, res: Response) {
     } catch (err: any) {
         res.status(err.status || 500).json({ error: err.message || "Failed to read tree" });
     }
-}
+});
+
+export const getRepoTree = asyncHandler(async (req: Request, res: Response) => {
+    const { user, repo } = req.params as { user: string; repo: string };
+    const branch = (req.query.branch as string) || "main";
+    const scopePath = toPosix((req.query.path as string) || "");
+
+    const gitdir = bareRepoPath(user, repo);
+    await ensureRepoExists(gitdir);
+
+    // Resolve branch → commit
+    let head: string;
+    try {
+        head = await git.resolveRef({ fs, gitdir, ref: branch });
+    } catch {
+        return res.status(404).json({ error: `Branch not found: ${branch}` });
+    }
+
+    // Read commit to get root tree
+    const { commit } = await git.readCommit({ fs, gitdir, oid: head });
+    let treeOid = commit.tree;
+
+    // Walk down to the requested scopePath if given
+    if (scopePath) {
+        const parts = scopePath.split("/").filter(Boolean);
+        for (const part of parts) {
+            const { tree } = await git.readTree({ fs, gitdir, oid: treeOid });
+            const entry = tree.find((e) => e.path === part);
+            if (!entry || entry.type !== "tree") {
+                return res.status(404).json({ error: `Path not found: ${scopePath}` });
+            }
+            treeOid = entry.oid; // descend into subdirectory
+        }
+    }
+
+    // recursive walker
+    async function buildTree(oid: string, basePath: string): Promise<RepoTreeItem[]> {
+        const { tree } = await git.readTree({ fs, gitdir, oid });
+        const results: RepoTreeItem[] = [];
+
+        for (const entry of tree) {
+            const fullPath = basePath ? `${basePath}/${entry.path}` : entry.path;
+            if (entry.type === "tree") {
+                results.push({
+                    name: entry.path,
+                    path: fullPath,
+                    type: "dir",
+                    oid: entry.oid,
+                    children: await buildTree(entry.oid, fullPath),
+                });
+            } else {
+                results.push({
+                    name: entry.path,
+                    path: fullPath,
+                    type: "file",
+                    oid: entry.oid,
+                });
+            }
+        }
+
+        results.sort((a, b) =>
+            a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1
+        );
+
+        return results;
+    }
+
+    const tree = await buildTree(treeOid, scopePath);
+
+    res.json({ branch, path: scopePath, tree });
+});
