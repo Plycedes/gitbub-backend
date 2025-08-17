@@ -7,7 +7,7 @@ import { Repo } from "../models/repo.model";
 import { CustomRequest } from "../middlewares/auth.middleware";
 import { ApiError } from "../utils/ApiError";
 import { asyncHandler } from "../utils/asyncHandler";
-import { CreateRepoRequestBody, RepoTreeItem } from "../types/requestTypes";
+import { CreateRepoRequestBody, EditFileRequest, RepoTreeItem } from "../types/requestTypes";
 import {
     bareRepoPath,
     ensureRepoExists,
@@ -241,3 +241,65 @@ export const getFileContent = asyncHandler(async (req: Request, res: Response) =
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.status(200).send(text);
 });
+
+export const editFileAndCommit = asyncHandler(
+    async (req: CustomRequest<EditFileRequest>, res: Response) => {
+        const { user, repo } = req.params as { user: string; repo: string };
+        const { branch = "main", filepath, content, message, authorName, authorEmail } = req.body;
+
+        if (!filepath || !message) {
+            throw new ApiError(400, "Missing filepath or commit message");
+        }
+
+        const safePath = toPosix(filepath);
+        const gitdir = bareRepoPath(user, repo);
+
+        try {
+            await git.resolveRef({ fs, gitdir, ref: branch });
+        } catch {
+            throw new ApiError(404, `Branch not found: ${branch}`);
+        }
+
+        try {
+            await ensureRepoExists(gitdir);
+
+            // Make a tiny temp workdir linked to the bare repo
+            const { dir } = await makeTempWorkdir(gitdir);
+            try {
+                // Ensure folder structure exists
+                const absFile = path.join(dir, safePath);
+                await fsp.mkdir(path.dirname(absFile), { recursive: true });
+
+                // Write new content (you can support base64 or binary if needed)
+                await fsp.writeFile(absFile, content, "utf8");
+
+                // Stage & commit against the branch in the *bare* repo
+                await git.add({ fs, dir, gitdir, filepath: safePath });
+
+                const author = {
+                    name: authorName || "Web Editor",
+                    email: authorEmail || "web@example.com",
+                    timestamp: Math.floor(Date.now() / 1000),
+                    timezoneOffset: new Date().getTimezoneOffset(),
+                };
+
+                const oid = await git.commit({
+                    fs,
+                    dir,
+                    gitdir,
+                    message,
+                    author,
+                    committer: author,
+                    ref: branch,
+                });
+
+                // Optionally return the new commit + tree info
+                res.json({ ok: true, oid, branch, path: safePath });
+            } finally {
+                await rmrf(dir);
+            }
+        } catch (err: any) {
+            throw new ApiError(500, "Edit/commit failed");
+        }
+    }
+);

@@ -41,3 +41,12 @@ export interface RepoTreeItem {
     oid: string;
     children?: RepoTreeItem[];
 }
+
+export interface EditFileRequest {
+    branch?: string;
+    filepath: string;
+    content: string;
+    message: string;
+    authorName?: string;
+    authorEmail?: string;
+}

@@ -41,12 +41,7 @@ app.use(
     express.urlencoded({ extended: true, limit: "16kb" }),
     userRouter
 );
-app.use(
-    "/api/v1/repos",
-    express.json({ limit: "16kb" }),
-    express.urlencoded({ extended: true, limit: "16kb" }),
-    repoRouter
-);
+app.use("/api/v1/repos", express.json(), express.urlencoded({ extended: true }), repoRouter);
 
 import gitRouter from "./routers/git.router";
 app.use("", gitRouter);
