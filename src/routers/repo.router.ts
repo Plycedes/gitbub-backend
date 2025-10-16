@@ -6,12 +6,15 @@ import {
     getRepoCommits,
     getRepoPath,
     getRepoTree,
+    getUserRepos,
 } from "../controllers/repo.controller";
 import { verifyJWT } from "../middlewares/auth.middleware";
 
 const router = Router();
 
 router.post("/create", verifyJWT, createRepo);
+router.get("/:username", verifyJWT, getUserRepos);
+
 router.put("/:user/:repo/file", verifyJWT, editFileAndCommit);
 
 router.get("/:user/:repo/tree", verifyJWT, getRepoTree);

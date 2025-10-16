@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 export interface IUser extends Document {
+    _id: Types.ObjectId;
     username: string;
     email: string;
     avatar: string;

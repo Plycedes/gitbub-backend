@@ -17,6 +17,8 @@ import {
     toPosix,
 } from "./helpers/git.helpers";
 import * as git from "isomorphic-git";
+import { ApiResponse } from "../utils/ApiResponse";
+import { User } from "../models/user.model";
 
 export const createRepo = asyncHandler(
     async (req: CustomRequest<CreateRepoRequestBody>, res: Response) => {
@@ -53,6 +55,16 @@ export const createRepo = asyncHandler(
         res.status(201).json({ success: true, repo });
     }
 );
+
+export const getUserRepos = asyncHandler(async (req: Request, res: Response) => {
+    const { username } = req.params;
+    const user = await User.findOne({ username: username });
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+    const repos = await Repo.find({ $and: [{ owner: user._id }, { visibility: "public" }] });
+    return res.status(200).json(new ApiResponse(200, repos, "Fetched user repos successfully"));
+});
 
 export const getRepoPath = asyncHandler(async (req: Request, res: Response) => {
     try {

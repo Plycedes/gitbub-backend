@@ -68,10 +68,10 @@ export const gitReceivePack = asyncHandler(
             return;
         }
 
-        if (!req.user || repoDoc.owner._id.toString() !== (req.user?._id as string).toString()) {
+        if (!req.user || repoDoc.owner._id.toString() !== req.user?._id.toString()) {
             console.log(
                 "Wrong credentials: ",
-                (req.user?._id as string).toString(),
+                req.user?._id.toString(),
                 repoDoc.owner._id.toString()
             );
             res.status(403).send("You do not have permission to push to this repository");
